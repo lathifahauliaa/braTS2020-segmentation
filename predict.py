@@ -32,7 +32,7 @@ else:
 
 CROP_SIZE  = (128, 128, 128)
 DEVICE     = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-N_PATIENTS = 3                     # how many patients to visualise
+N_PATIENTS = 80                    # visualise all training patients
 N_SLICES   = 5                     # how many slices per patient
 
 LABEL_COLOURS = np.array([
@@ -297,7 +297,7 @@ if __name__ == '__main__':
     if not patients:
         raise FileNotFoundError(f"No patients found in:\n  {DATA_ROOT}")
 
-    sample = random.sample(patients, min(N_PATIENTS, len(patients)))
+    sample = patients[:N_PATIENTS]
     print(f"\nVisualising {len(sample)} patients...\n")
 
     for pdir in sample:
