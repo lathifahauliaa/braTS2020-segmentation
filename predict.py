@@ -37,10 +37,10 @@ N_PATIENTS = 64                    # visualise all 64 training patients
 N_SLICES   = 5                     # how many slices per patient
 
 LABEL_COLOURS = np.array([
-    [0.0, 0.0, 0.0, 0.0],   # background  - transparent
-    [1.0, 0.0, 0.0, 0.7],   # necrosis    - red
-    [0.0, 1.0, 0.0, 0.7],   # oedema      - green
-    [0.0, 0.5, 1.0, 0.7],   # enhancing   - blue
+    [0.267, 0.005, 0.329, 1.0],  # background  - dark purple  (viridis 0.0)
+    [0.192, 0.408, 0.557, 1.0],  # necrosis    - dark blue    (viridis 0.33)
+    [0.208, 0.718, 0.475, 1.0],  # oedema      - teal green   (viridis 0.67)
+    [0.992, 0.906, 0.145, 1.0],  # enhancing   - yellow       (viridis 1.0)
 ], dtype=np.float32)
 
 LABEL_NAMES = ['Background', 'Necrotic Core', 'Oedema', 'Enhancing Tumour']
@@ -207,13 +207,11 @@ def show_patient(image_np, pred, gt, patient_id, n_slices=5):
         axes[row, 1].imshow(t1ce, cmap='gray', origin='lower')
         axes[row, 1].axis('off')
 
-        # Column 3 — Prediction overlay
-        axes[row, 2].imshow(flair, cmap='gray', origin='lower')
+        # Column 3 — Prediction (solid colour map, no MRI background)
         axes[row, 2].imshow(LABEL_COLOURS[pred[:, :, sl]], origin='lower')
         axes[row, 2].axis('off')
 
-        # Column 4 — Ground Truth overlay
-        axes[row, 3].imshow(flair, cmap='gray', origin='lower')
+        # Column 4 — Ground Truth (solid colour map, no MRI background)
         axes[row, 3].imshow(LABEL_COLOURS[gt[:, :, sl]], origin='lower')
         axes[row, 3].axis('off')
 
