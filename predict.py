@@ -292,8 +292,8 @@ if __name__ == '__main__':
         print("\nPlotting training curves...")
         plot_training_curves(ckpt['history'])
 
-    # 3. Predict and visualise patients
-    patients = sorted(glob.glob(os.path.join(DATA_ROOT, 'BraTS20_Training_*')))
+    # 3. Predict and visualise patients (only from the 80 used in training)
+    patients = sorted(glob.glob(os.path.join(DATA_ROOT, 'BraTS20_Training_*')))[:80]
     if not patients:
         raise FileNotFoundError(f"No patients found in:\n  {DATA_ROOT}")
 
