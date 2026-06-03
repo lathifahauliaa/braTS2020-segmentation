@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from sklearn.model_selection import train_test_split
 
 # =============================================================================
 # CONFIG
@@ -32,7 +33,7 @@ else:
 
 CROP_SIZE  = (128, 128, 128)
 DEVICE     = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-N_PATIENTS = 80                    # visualise all training patients
+N_PATIENTS = 64                    # visualise all 64 training patients
 N_SLICES   = 5                     # how many slices per patient
 
 LABEL_COLOURS = np.array([
@@ -292,12 +293,13 @@ if __name__ == '__main__':
         print("\nPlotting training curves...")
         plot_training_curves(ckpt['history'])
 
-    # 3. Predict and visualise patients (only from the 80 used in training)
-    patients = sorted(glob.glob(os.path.join(DATA_ROOT, 'BraTS20_Training_*')))[:80]
-    if not patients:
+    # 3. Predict and visualise — replicate exact same split as train.py
+    all_patients = sorted(glob.glob(os.path.join(DATA_ROOT, 'BraTS20_Training_*')))[:80]
+    if not all_patients:
         raise FileNotFoundError(f"No patients found in:\n  {DATA_ROOT}")
 
-    sample = patients[:N_PATIENTS]
+    train_dirs, _ = train_test_split(all_patients, test_size=0.2, random_state=42)
+    sample = sorted(train_dirs)[:N_PATIENTS]
     print(f"\nVisualising {len(sample)} patients...\n")
 
     for pdir in sample:
