@@ -82,22 +82,29 @@ def build_loaders():
         print(f"[Quick-run] Using {len(all_patients)} / "
               f"{len(sorted(glob.glob(os.path.join(DATA_ROOT, 'BraTS20_Training_*'))))} patients.")
 
-    train_dirs, val_dirs = train_test_split(
-        all_patients, test_size=0.2, random_state=SEED)
+    # Split 1: pisahkan test (9%) dari sisanya (91%)
+    trainval_dirs, test_dirs = train_test_split(
+        all_patients, test_size=0.09, random_state=SEED)
 
-    pin = torch.cuda.is_available()   # pin_memory only helps with CUDA
+    # Split 2: dari 91%, pisahkan val (27/91 ≈ 29.7%) → train 64%, val 27%
+    train_dirs, val_dirs = train_test_split(
+        trainval_dirs, test_size=0.27/0.91, random_state=SEED)
+
+    pin = torch.cuda.is_available()
 
     train_ds = BraTS2020Dataset(train_dirs, transform=get_train_transforms(),
                                 crop_size=CROP_SIZE)
-    val_ds   = BraTS2020Dataset(val_dirs,   transform=None,
-                                crop_size=CROP_SIZE)
+    val_ds   = BraTS2020Dataset(val_dirs,  transform=None, crop_size=CROP_SIZE)
+    test_ds  = BraTS2020Dataset(test_dirs, transform=None, crop_size=CROP_SIZE)
 
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,
                               num_workers=NUM_WORKERS, pin_memory=pin)
-    val_loader   = DataLoader(val_ds,   batch_size=1,          shuffle=False,
+    val_loader   = DataLoader(val_ds,  batch_size=1, shuffle=False,
+                              num_workers=NUM_WORKERS, pin_memory=pin)
+    test_loader  = DataLoader(test_ds, batch_size=1, shuffle=False,
                               num_workers=NUM_WORKERS, pin_memory=pin)
 
-    return train_loader, val_loader, len(train_ds), len(val_ds)
+    return train_loader, val_loader, test_loader, len(train_ds), len(val_ds), len(test_ds)
 
 
 # ── Training epoch ────────────────────────────────────────────────────────────
@@ -181,7 +188,7 @@ def main():
     print(f"  AMP enabled : {USE_AMP}")
     print(f"  Data root   : {DATA_ROOT}")
 
-    train_loader, val_loader, n_train, n_val = build_loaders()
+    train_loader, val_loader, test_loader, n_train, n_val, n_test = build_loaders()
 
     model     = AttentionUNet3D(in_channels=4, out_channels=NUM_CLASSES).to(DEVICE)
     criterion = CombinedLoss(num_classes=NUM_CLASSES)
@@ -191,7 +198,7 @@ def main():
                                             eta_min=1e-6)
     scaler    = GradScaler('cuda', enabled=USE_AMP)
 
-    print(f"  Train/Val   : {n_train} / {n_val} patients")
+    print(f"  Train/Val/Test : {n_train} / {n_val} / {n_test} patients")
     print(f"  Parameters  : {count_parameters(model):,}")
     print(f"  Epochs      : {EPOCHS}  |  Patience: {PATIENCE}")
     print("=" * 72)
@@ -248,6 +255,23 @@ def main():
 
     print(f"\nTraining complete.  Best mean Dice = {best_mean_dice:.4f}")
     print(f"Checkpoint saved at: {os.path.join(CHECKPOINT_DIR, 'best_model.pth')}")
+
+    # Evaluasi final di test set menggunakan best checkpoint
+    print("\n" + "=" * 72)
+    print("  Final Evaluation on Test Set")
+    print("=" * 72)
+    ckpt = torch.load(os.path.join(CHECKPOINT_DIR, 'best_model.pth'),
+                      map_location=DEVICE)
+    model.load_state_dict(ckpt['model_state_dict'])
+    test_loss, test_dice, test_miou = validate(model, test_loader, criterion)
+    test_mean_dice = float(np.mean(list(test_dice.values())))
+    print(f"  TestLoss  : {test_loss:.4f}")
+    print(f"  WT Dice   : {test_dice['WT']:.4f}  |  "
+          f"TC Dice : {test_dice['TC']:.4f}  |  "
+          f"ET Dice : {test_dice['ET']:.4f}")
+    print(f"  Mean Dice : {test_mean_dice:.4f}  |  mIoU : {test_miou:.4f}")
+    print("=" * 72)
+
     return history
 
 
