@@ -306,7 +306,7 @@ class ScoreCAM3D(BaseCAM3D):
                 if (i + 1) % 8 == 0:
                     print(f"      ScoreCAM channel {i+1}/{len(top_ch)}...", flush=True)
 
-                act_ch   = torch.from_numpy(acts[ch]).float().unsqueeze(0).unsqueeze(0)
+                act_ch   = torch.from_numpy(acts[ch]).float().unsqueeze(0).unsqueeze(0).to(input_tensor.device)
                 act_up   = F.interpolate(act_ch, size=inp_size, mode='trilinear',
                                          align_corners=False).squeeze()
                 a_min, a_max = act_up.min(), act_up.max()
