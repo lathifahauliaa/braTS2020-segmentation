@@ -327,7 +327,7 @@ if __name__ == '__main__':
         image_t = image_t.to(DEVICE)
 
         for class_idx, class_name in CLASS_NAMES.items():
-            gt_mask = (gt == class_idx).numpy()
+            gt_mask = (gt == class_idx)
             if gt_mask.sum() == 0:
                 print(f"  Skipping {class_name} — no GT voxels")
                 continue
