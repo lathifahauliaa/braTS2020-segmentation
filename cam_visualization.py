@@ -18,6 +18,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from scipy.ndimage import gaussian_filter
+from sklearn.model_selection import train_test_split
 
 # =============================================================================
 # CONFIG
@@ -532,6 +533,12 @@ def plot_cam_combined(image_np, gt, pred, heatmaps_by_class, pid, slices):
 # MAIN
 # =============================================================================
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--n_patients', type=int, default=N_PATIENTS,
+                        help='Jumlah pasien yang diproses (default: 80)')
+    args = parser.parse_args()
+
     print("=" * 65)
     print("  BraTS 2020 — Custom 3D CAM Comparison")
     print("  GradCAM | GradCAM++ | ScoreCAM | XGradCAM | AblationCAM")
@@ -548,14 +555,14 @@ if __name__ == '__main__':
     best = ckpt.get('best_dice', ckpt.get('best_mean_dice', 0))
     print(f"  Epoch={ckpt.get('epoch','?')}   Best Dice={best:.4f}")
 
-    # Target layer = decoder[1].conv2 (32x32x32 — semantic + spatial balance)
-    # bottleneck.conv2 is only 8x8x8 → 16x upsample → too blurry
-    # decoders[1].conv2 is 32x32x32 → 4x upsample → much sharper CAM
     target_layer = model.decoders[1].conv2
     print(f"  Target layer: decoders[1].conv2  (32x32x32)")
 
-    patients = sorted(glob.glob(os.path.join(DATA_ROOT, 'BraTS20_Training_*')))
-    sample   = patients[:N_PATIENTS]
+    # Replicate exact same split as train.py → ambil test set saja
+    SEED = 42
+    all_patients    = sorted(glob.glob(os.path.join(DATA_ROOT, 'BraTS20_Training_*')))[:args.n_patients]
+    trainval, sample = train_test_split(all_patients, test_size=0.09, random_state=SEED)
+    print(f"  Test set : {len(sample)} pasien (split 9% dari {len(all_patients)})")
 
     for p_idx, pdir in enumerate(sample, 1):
         pid = os.path.basename(pdir)
