@@ -18,7 +18,6 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from scipy.ndimage import gaussian_filter
-from sklearn.model_selection import train_test_split
 
 # =============================================================================
 # CONFIG
@@ -558,11 +557,9 @@ if __name__ == '__main__':
     target_layer = model.decoders[1].conv2
     print(f"  Target layer: decoders[1].conv2  (32x32x32)")
 
-    # Replicate exact same split as train.py → ambil test set saja
-    SEED = 42
-    all_patients    = sorted(glob.glob(os.path.join(DATA_ROOT, 'BraTS20_Training_*')))[:args.n_patients]
-    trainval, sample = train_test_split(all_patients, test_size=0.09, random_state=SEED)
-    print(f"  Test set : {len(sample)} pasien (split 9% dari {len(all_patients)})")
+    patients = sorted(glob.glob(os.path.join(DATA_ROOT, 'BraTS20_Training_*')))
+    sample   = patients[:args.n_patients]
+    print(f"  Memproses {len(sample)} pasien")
 
     for p_idx, pdir in enumerate(sample, 1):
         pid = os.path.basename(pdir)
