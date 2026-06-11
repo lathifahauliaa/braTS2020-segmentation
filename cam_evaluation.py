@@ -259,8 +259,13 @@ def compute_dauc(model, x, cam, class_idx, n_steps=N_STEPS):
 def compute_iauc(model, x, cam, class_idx, n_steps=N_STEPS):
     """
     Insertion AUC — insert most important voxels into blurred baseline.
-    Higher IAUC = better (adding highlighted region quickly recovers score).
+    Scores normalized by full-image score (per Hardani et al. 2024).
+    Higher IAUC = better (0–1 scale; quickly recovering score = good CAM).
     """
+    f_full = _model_score(model, x, class_idx)
+    if f_full < 1e-8:
+        return 0.0
+
     x_np   = x.squeeze(0).cpu().numpy()
     x_blur = torch.from_numpy(
         np.stack([gaussian_filter(x_np[c], sigma=10) for c in range(x_np.shape[0])], axis=0)
@@ -269,7 +274,7 @@ def compute_iauc(model, x, cam, class_idx, n_steps=N_STEPS):
     H, W, D = cam.shape
     order   = np.argsort(cam.ravel())[::-1]
     total   = len(order)
-    scores  = [_model_score(model, x_blur, class_idx)]
+    scores  = [_model_score(model, x_blur, class_idx) / f_full]
 
     for s in range(1, n_steps + 1):
         k    = int(s / n_steps * total)
@@ -277,7 +282,7 @@ def compute_iauc(model, x, cam, class_idx, n_steps=N_STEPS):
         mask[order[:k]] = 1
         m3d  = torch.from_numpy(mask.reshape(H, W, D)).to(x.device)
         x_ins = x_blur + m3d.unsqueeze(0).unsqueeze(0) * (x - x_blur)
-        scores.append(_model_score(model, x_ins, class_idx))
+        scores.append(_model_score(model, x_ins, class_idx) / f_full)
 
     return float(np.trapz(scores, np.linspace(0, 1, n_steps + 1)))
 
