@@ -48,7 +48,7 @@ USE_AMP = torch.cuda.is_available()
 SEED    = 42
 
 # ── Number of patients (set to None to use all 369) ───────────────────────────
-MAX_PATIENTS = 80
+MAX_PATIENTS = 150
 
 # ── Hyperparameters ───────────────────────────────────────────────────────────
 BATCH_SIZE      = 2 if IS_COLAB else 1   # Colab T4/A100 has more VRAM
