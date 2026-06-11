@@ -253,14 +253,14 @@ def compute_dauc(model, x, cam, class_idx, n_steps=N_STEPS):
         m3d  = torch.from_numpy(mask.reshape(H, W, D)).to(x.device)
         scores.append(_model_score(model, x * m3d.unsqueeze(0).unsqueeze(0), class_idx))
 
-    return float(np.trapz(scores, np.linspace(0, 1, n_steps + 1)))
+    return float(np.trapezoid(scores, np.linspace(0, 1, n_steps + 1)) if hasattr(np, 'trapezoid') else np.trapz(scores, np.linspace(0, 1, n_steps + 1)))
 
 
 def compute_iauc(model, x, cam, class_idx, n_steps=N_STEPS):
     """
     Insertion AUC — insert most important voxels into blurred baseline.
-    Scores normalized by full-image score (per Hardani et al. 2024).
-    Higher IAUC = better (0–1 scale; quickly recovering score = good CAM).
+    Scores normalized by full-image score and clipped to [0,1] (per Hardani et al. 2024).
+    Higher IAUC = better.
     """
     f_full = _model_score(model, x, class_idx)
     if f_full < 1e-8:
@@ -274,7 +274,7 @@ def compute_iauc(model, x, cam, class_idx, n_steps=N_STEPS):
     H, W, D = cam.shape
     order   = np.argsort(cam.ravel())[::-1]
     total   = len(order)
-    scores  = [_model_score(model, x_blur, class_idx) / f_full]
+    scores  = [min(_model_score(model, x_blur, class_idx) / f_full, 1.0)]
 
     for s in range(1, n_steps + 1):
         k    = int(s / n_steps * total)
@@ -282,9 +282,9 @@ def compute_iauc(model, x, cam, class_idx, n_steps=N_STEPS):
         mask[order[:k]] = 1
         m3d  = torch.from_numpy(mask.reshape(H, W, D)).to(x.device)
         x_ins = x_blur + m3d.unsqueeze(0).unsqueeze(0) * (x - x_blur)
-        scores.append(_model_score(model, x_ins, class_idx) / f_full)
+        scores.append(min(_model_score(model, x_ins, class_idx) / f_full, 1.0))
 
-    return float(np.trapz(scores, np.linspace(0, 1, n_steps + 1)))
+    return float(np.trapezoid(scores, np.linspace(0, 1, n_steps + 1)) if hasattr(np, 'trapezoid') else np.trapz(scores, np.linspace(0, 1, n_steps + 1)))
 
 
 def compute_iou(cam, gt_mask, threshold=0.5):
