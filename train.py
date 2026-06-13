@@ -1,16 +1,19 @@
 """
-Training script — Attention 3D U-Net on BraTS 2020 (80-patient run).
+Training script — Attention 3D U-Net on BraTS 2020.
 
-Run locally (VS Code):
-    python train.py
+Scheduler : CosineAnnealingLR (Isensee et al., 2021 — nnU-Net, Nature Methods 18(2):203-211)
+            LR turun monoton dari eta_max ke eta_min selama T_max epoch,
+            tanpa warm restart → kompatibel penuh dengan early stopping.
 
 Run on Google Colab:
     1. Mount Google Drive
-    2. Upload this project to Google Drive under BraTS2020/
-    3. Upload dataset to Google Drive under BraTS2020/MICCAI_BraTS2020_TrainingData/
-    4. !python train.py
+    2. !git clone https://github.com/lathifahauliaa/braTS2020-segmentation.git /content/repo
+    3. %cd /content/repo
+    4. !pip install -r requirements.txt -q
+    5. !python train.py
 
-After training finishes, best weights are saved to CHECKPOINT_DIR/best_model.pth
+Jika sesi Colab terputus, jalankan ulang — training otomatis dilanjut dari epoch terakhir
+via resume.pth yang tersimpan di CHECKPOINT_DIR.
 """
 
 import os
@@ -21,7 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.amp import autocast, GradScaler
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from sklearn.model_selection import train_test_split
 
 from dataset    import BraTS2020Dataset
@@ -36,11 +39,13 @@ IS_COLAB = os.path.exists('/content')
 # ── Paths (auto-selected by environment) ─────────────────────────────────────
 if IS_COLAB:
     COLAB_DRIVE_ROOT = '/content/drive/MyDrive/skripsi'
-    DATA_ROOT      = f'{COLAB_DRIVE_ROOT}/dataset/brats/archive/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData'
-    CHECKPOINT_DIR = f'{COLAB_DRIVE_ROOT}/checkpoints'
+    DATA_ROOT        = f'{COLAB_DRIVE_ROOT}/dataset/brats/archive/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData'
+    CHECKPOINT_DIR   = f'{COLAB_DRIVE_ROOT}/checkpoints'
 else:
     DATA_ROOT      = r'D:\skripsi\dataset\brats\archive\BraTS2020_TrainingData\MICCAI_BraTS2020_TrainingData'
     CHECKPOINT_DIR = r'D:\skripsi\checkpoints'
+
+RESUME_PATH = os.path.join(CHECKPOINT_DIR, 'resume.pth')
 
 # ── Device ────────────────────────────────────────────────────────────────────
 DEVICE  = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -48,7 +53,7 @@ USE_AMP = torch.cuda.is_available()
 SEED    = 42
 
 # ── Number of patients (set to None to use all 369) ───────────────────────────
-MAX_PATIENTS = 150
+MAX_PATIENTS = 250
 
 # ── Hyperparameters ───────────────────────────────────────────────────────────
 BATCH_SIZE      = 2 if IS_COLAB else 1   # Colab T4/A100 has more VRAM
@@ -58,7 +63,7 @@ EPOCHS          = 100 if IS_COLAB else 30
 CROP_SIZE       = (128, 128, 128)
 NUM_CLASSES     = 4
 DEEP_SUP_WEIGHT = 0.4
-PATIENCE        = 10
+PATIENCE        = 15
 NUM_WORKERS     = 2 if IS_COLAB else 0   # Windows requires 0 to avoid DataLoader freeze
 
 torch.manual_seed(SEED)
@@ -194,8 +199,9 @@ def main():
     criterion = CombinedLoss(num_classes=NUM_CLASSES)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR,
                                   weight_decay=WEIGHT_DECAY, amsgrad=True)
-    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=20, T_mult=2,
-                                            eta_min=1e-6)
+    # CosineAnnealingLR: LR turun monoton dari LR ke eta_min selama EPOCHS epoch.
+    # Referensi: Isensee et al. (2021), nnU-Net, Nature Methods 18(2):203-211.
+    scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
     scaler    = GradScaler('cuda', enabled=USE_AMP)
 
     print(f"  Train/Val/Test : {n_train} / {n_val} / {n_test} patients")
@@ -205,10 +211,26 @@ def main():
 
     best_mean_dice = 0.0
     no_improve     = 0
+    start_epoch    = 1
     history        = {k: [] for k in ['train_loss', 'val_loss',
                                        'WT', 'TC', 'ET', 'mIoU']}
 
-    for epoch in range(1, EPOCHS + 1):
+    # ── Resume dari checkpoint jika sesi Colab terputus ───────────────────────
+    if os.path.exists(RESUME_PATH):
+        print(f"\n  [Resume] Memuat checkpoint dari: {RESUME_PATH}")
+        ckpt = torch.load(RESUME_PATH, map_location=DEVICE)
+        model.load_state_dict(ckpt['model_state_dict'])
+        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+        best_mean_dice = ckpt['best_mean_dice']
+        no_improve     = ckpt['no_improve']
+        start_epoch    = ckpt['epoch'] + 1
+        history        = ckpt['history']
+        print(f"  [Resume] Lanjut dari epoch {start_epoch}  |  "
+              f"Best Dice sejauh ini: {best_mean_dice:.4f}")
+        print("=" * 72)
+
+    for epoch in range(start_epoch, EPOCHS + 1):
         print(f"\nEpoch [{epoch:03d}/{EPOCHS}]")
 
         train_loss = train_one_epoch(model, train_loader, optimizer,
@@ -233,7 +255,18 @@ def main():
               f"ET Dice : {dice_scores['ET']:.4f}")
         print(f"  mIoU      : {miou:.4f}  |  LR : {lr_now:.2e}")
 
-        # Save best checkpoint
+        # ── Simpan resume checkpoint setiap epoch ─────────────────────────────
+        torch.save({
+            'epoch':                epoch,
+            'model_state_dict':     model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'best_mean_dice':       best_mean_dice,
+            'no_improve':           no_improve,
+            'history':              history,
+        }, RESUME_PATH)
+
+        # ── Simpan best model ──────────────────────────────────────────────────
         if mean_dice > best_mean_dice:
             best_mean_dice = mean_dice
             no_improve     = 0
