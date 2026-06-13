@@ -105,9 +105,9 @@ def build_loaders():
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,
                               num_workers=NUM_WORKERS, pin_memory=pin)
     val_loader   = DataLoader(val_ds,  batch_size=1, shuffle=False,
-                              num_workers=NUM_WORKERS, pin_memory=pin)
+                              num_workers=0, pin_memory=pin)
     test_loader  = DataLoader(test_ds, batch_size=1, shuffle=False,
-                              num_workers=NUM_WORKERS, pin_memory=pin)
+                              num_workers=0, pin_memory=pin)
 
     return train_loader, val_loader, test_loader, len(train_ds), len(val_ds), len(test_ds)
 
