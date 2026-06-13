@@ -64,7 +64,7 @@ CROP_SIZE       = (128, 128, 128)
 NUM_CLASSES     = 4
 DEEP_SUP_WEIGHT = 0.4
 PATIENCE        = 15
-NUM_WORKERS     = 2 if IS_COLAB else 0   # Windows requires 0 to avoid DataLoader freeze
+NUM_WORKERS     = 0   # 0 untuk semua env: hindari DataLoader hang saat load file 3D besar
 
 torch.manual_seed(SEED)
 np.random.seed(SEED)
