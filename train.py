@@ -12,7 +12,16 @@ Run on Google Colab:
     4. !pip install -r requirements.txt -q
     5. !python train.py
 
-Jika sesi Colab terputus, jalankan ulang — training otomatis dilanjut dari epoch terakhir
+Run on Kaggle:
+    1. Add dataset: BraTS2020 Dataset (Training + Validation) — awsaf49/brats20-dataset-training-validation
+    2. New Notebook → Advanced → Accelerator: GPU T4 x2
+    3. !git clone https://github.com/lathifahauliaa/braTS2020-segmentation.git /kaggle/working/repo
+    4. %cd /kaggle/working/repo
+    5. !pip install -r requirements.txt -q
+    6. !python train.py
+    (Checkpoint tersimpan di /kaggle/working/checkpoints — download via Output tab)
+
+Jika sesi terputus, jalankan ulang — training otomatis dilanjut dari epoch terakhir
 via resume.pth yang tersimpan di CHECKPOINT_DIR.
 """
 
@@ -34,10 +43,14 @@ from metrics    import dice_per_region, iou_per_class
 from transforms import get_train_transforms
 
 # ── Environment detection ──────────────────────────────────────────────────────
-IS_COLAB = os.path.exists('/content')
+IS_KAGGLE = os.path.exists('/kaggle/working')
+IS_COLAB  = os.path.exists('/content') and not IS_KAGGLE
 
 # ── Paths (auto-selected by environment) ─────────────────────────────────────
-if IS_COLAB:
+if IS_KAGGLE:
+    DATA_ROOT      = '/kaggle/input/brats20-dataset-training-validation/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData'
+    CHECKPOINT_DIR = '/kaggle/working/checkpoints'
+elif IS_COLAB:
     COLAB_DRIVE_ROOT = '/content/drive/MyDrive/skripsi'
     DATA_ROOT        = f'{COLAB_DRIVE_ROOT}/dataset/brats/archive/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData'
     CHECKPOINT_DIR   = f'{COLAB_DRIVE_ROOT}/checkpoints'
@@ -56,15 +69,15 @@ SEED    = 42
 MAX_PATIENTS = 250
 
 # ── Hyperparameters ───────────────────────────────────────────────────────────
-BATCH_SIZE      = 2 if IS_COLAB else 1   # Colab T4/A100 has more VRAM
+BATCH_SIZE      = 2 if (IS_COLAB or IS_KAGGLE) else 1
 LR              = 1e-3
 WEIGHT_DECAY    = 1e-2
-EPOCHS          = 100 if IS_COLAB else 30
+EPOCHS          = 100 if (IS_COLAB or IS_KAGGLE) else 30
 CROP_SIZE       = (128, 128, 128)
 NUM_CLASSES     = 4
 DEEP_SUP_WEIGHT = 0.4
 PATIENCE        = 15
-NUM_WORKERS     = 0   # 0 untuk semua env: hindari DataLoader hang saat load file 3D besar
+NUM_WORKERS     = 4 if IS_KAGGLE else 0   # Kaggle: multi-core aman; Colab: 0 hindari hang
 
 torch.manual_seed(SEED)
 np.random.seed(SEED)
@@ -186,9 +199,11 @@ def validate(model, loader, criterion):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    env = "Kaggle" if IS_KAGGLE else ("Colab" if IS_COLAB else "Local")
     print("=" * 72)
     print("  BraTS 2020 — Attention 3D U-Net Training")
     print("=" * 72)
+    print(f"  Environment : {env}")
     print(f"  Device      : {DEVICE}")
     print(f"  AMP enabled : {USE_AMP}")
     print(f"  Data root   : {DATA_ROOT}")
