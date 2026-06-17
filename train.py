@@ -48,7 +48,7 @@ IS_COLAB  = os.path.exists('/content') and not IS_KAGGLE
 
 # ── Paths (auto-selected by environment) ─────────────────────────────────────
 if IS_KAGGLE:
-    DATA_ROOT      = '/kaggle/input/brats20-dataset-training-validation/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData'
+    DATA_ROOT      = '/kaggle/input/datasets/awsaf49/brats20-dataset-training-validation/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData'
     CHECKPOINT_DIR = '/kaggle/working/checkpoints'
 elif IS_COLAB:
     COLAB_DRIVE_ROOT = '/content/drive/MyDrive/skripsi'
