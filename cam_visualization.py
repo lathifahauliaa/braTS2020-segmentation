@@ -42,7 +42,7 @@ else:
 
 CROP_SIZE  = (128, 128, 128)
 DEVICE     = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-N_PATIENTS = 80
+N_PATIENTS = 250
 MODALITIES = ['flair', 't1', 't1ce', 't2']
 CLASS_NAMES = {1: 'Necrotic_Core', 2: 'Oedema', 3: 'Enhancing_Tumour'}
 
