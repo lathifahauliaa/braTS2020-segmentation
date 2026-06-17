@@ -23,9 +23,14 @@ from sklearn.model_selection import train_test_split
 # =============================================================================
 # CONFIG
 # =============================================================================
-IS_COLAB = os.path.exists('/content')
+IS_KAGGLE = os.path.exists('/kaggle/working')
+IS_COLAB  = os.path.exists('/content') and not IS_KAGGLE
 
-if IS_COLAB:
+if IS_KAGGLE:
+    DATA_ROOT  = '/kaggle/input/datasets/awsaf49/brats20-dataset-training-validation/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData'
+    CKPT_PATH  = '/kaggle/working/checkpoints/best_model.pth'
+    OUTPUT_DIR = '/kaggle/working/cam_results'
+elif IS_COLAB:
     COLAB_DRIVE_ROOT = '/content/drive/MyDrive/skripsi'
     DATA_ROOT  = f'{COLAB_DRIVE_ROOT}/dataset/brats/archive/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData'
     CKPT_PATH  = f'{COLAB_DRIVE_ROOT}/checkpoints/best_model.pth'
