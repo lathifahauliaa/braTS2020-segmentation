@@ -3,9 +3,12 @@ BraTS 2020 - Visualization
 Style: T1ce | FLAIR | T2 | Ground Truth | Prediction  (viridis colormap)
 
 Run: python visualize.py
+Run: python visualize.py --n_patients 5
 """
 
+import argparse
 import matplotlib
+from sklearn.model_selection import train_test_split
 matplotlib.use('Agg')   # save to file only, no window popup
 import os
 import glob
@@ -37,10 +40,11 @@ else:
     CKPT_PATH  = r'D:\skripsi\checkpoints\best_model.pth'
     OUTPUT_DIR = r'D:\skripsi\visualizations'
 
-CROP_SIZE  = (128, 128, 128)
-DEVICE     = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-N_PATIENTS = 80    # match training patient count
-MODALITIES = ['flair', 't1', 't1ce', 't2']   # index: 0=flair,1=t1,2=t1ce,3=t2
+CROP_SIZE    = (128, 128, 128)
+DEVICE       = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+MAX_PATIENTS = 250   # harus sama dengan train.py
+SEED         = 42    # harus sama dengan train.py
+MODALITIES   = ['flair', 't1', 't1ce', 't2']   # index: 0=flair,1=t1,2=t1ce,3=t2
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -329,6 +333,13 @@ def plot_middle_slice(image_np, pred, gt, pid):
 # MAIN
 # =============================================================================
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--n_patients', type=int, default=None,
+                        help='Jumlah pasien test set yang divisualisasi (default: semua test set)')
+    parser.add_argument('--split', choices=['train', 'val', 'test'], default='test',
+                        help='Split yang divisualisasi (default: test)')
+    args = parser.parse_args()
+
     print("=" * 60)
     print("  BraTS 2020 — Visualization")
     print("=" * 60)
@@ -351,9 +362,21 @@ if __name__ == '__main__':
         print("\n[1] Plotting training curves...")
         plot_training_curves(ckpt['history'])
 
-    # Load and visualize patients
-    patients = sorted(glob.glob(os.path.join(DATA_ROOT, 'BraTS20_Training_*')))
-    sample   = patients[:N_PATIENTS]   # same 20 patients used in training
+    # Replicate exact split dari train.py
+    all_patients = sorted(glob.glob(os.path.join(DATA_ROOT, 'BraTS20_Training_*')))
+    if MAX_PATIENTS:
+        all_patients = all_patients[:MAX_PATIENTS]
+
+    trainval_dirs, test_dirs = train_test_split(all_patients, test_size=0.09, random_state=SEED)
+    train_dirs, val_dirs     = train_test_split(trainval_dirs, test_size=0.27/0.91, random_state=SEED)
+
+    split_map = {'train': train_dirs, 'val': val_dirs, 'test': test_dirs}
+    sample    = sorted(split_map[args.split])
+    if args.n_patients:
+        sample = sample[:args.n_patients]
+
+    print(f"\nSplit: {args.split} | Total: {len(sample)} pasien")
+    print(f"  (train={len(train_dirs)}, val={len(val_dirs)}, test={len(test_dirs)})")
 
     for idx, pdir in enumerate(sample, 1):
         pid = os.path.basename(pdir)
