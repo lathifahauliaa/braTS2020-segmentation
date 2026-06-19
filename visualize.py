@@ -42,7 +42,7 @@ else:
 
 CROP_SIZE    = (128, 128, 128)
 DEVICE       = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-MAX_PATIENTS = 250   # harus sama dengan train.py
+MAX_PATIENTS = None  # None = semua 369 pasien, harus sama dengan train.py
 SEED         = 42    # harus sama dengan train.py
 MODALITIES   = ['flair', 't1', 't1ce', 't2']   # index: 0=flair,1=t1,2=t1ce,3=t2
 

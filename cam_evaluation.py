@@ -38,7 +38,7 @@ else:
 
 DEVICE      = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 CROP_SIZE   = (128, 128, 128)
-N_PATIENTS  = 250
+N_PATIENTS  = None  # None = semua 369 pasien
 SEED        = 42
 N_STEPS     = 10          # steps for DAUC / IAUC curve (11 points: 0%..100%)
 CAM_METHODS = ['GradCAM', 'GradCAM++', 'ScoreCAM', 'XGradCAM', 'AblationCAM']
