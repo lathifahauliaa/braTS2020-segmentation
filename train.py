@@ -66,7 +66,7 @@ USE_AMP = torch.cuda.is_available()
 SEED    = 42
 
 # ── Number of patients (set to None to use all 369) ───────────────────────────
-MAX_PATIENTS = 250
+MAX_PATIENTS = None
 
 # ── Hyperparameters ───────────────────────────────────────────────────────────
 BATCH_SIZE      = 2 if (IS_COLAB or IS_KAGGLE) else 1

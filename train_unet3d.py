@@ -54,7 +54,7 @@ USE_AMP = torch.cuda.is_available()
 SEED    = 42
 
 # ── Number of patients — SAMA dengan train.py agar fair ──────────────────────
-MAX_PATIENTS = 250
+MAX_PATIENTS = None
 
 # ── Hyperparameters — SAMA dengan train.py ────────────────────────────────────
 BATCH_SIZE  = 2 if (IS_COLAB or IS_KAGGLE) else 1
