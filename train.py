@@ -19,13 +19,14 @@ Run on Kaggle:
     4. %cd /kaggle/working/repo
     5. !pip install -r requirements.txt -q
     6. !python train.py
-    (Checkpoint tersimpan di /kaggle/working/checkpoints — download via Output tab)
-
-Jika sesi terputus, jalankan ulang — training otomatis dilanjut dari epoch terakhir
-via resume.pth yang tersimpan di CHECKPOINT_DIR.
 """
 
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
 import os
+import sys
 import glob
 import numpy as np
 import torch
@@ -46,7 +47,7 @@ from transforms import get_train_transforms
 IS_KAGGLE = os.path.exists('/kaggle/working')
 IS_COLAB  = os.path.exists('/content') and not IS_KAGGLE
 
-# ── Paths (auto-selected by environment) ─────────────────────────────────────
+# ── Paths (auto-selected by environment) ──────────────────────────────────────
 if IS_KAGGLE:
     DATA_ROOT      = '/kaggle/input/datasets/awsaf49/brats20-dataset-training-validation/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData'
     CHECKPOINT_DIR = '/kaggle/working/checkpoints'
@@ -58,7 +59,8 @@ else:
     DATA_ROOT      = r'D:\skripsi\dataset\brats\archive\BraTS2020_TrainingData\MICCAI_BraTS2020_TrainingData'
     CHECKPOINT_DIR = r'D:\skripsi\checkpoints'
 
-RESUME_PATH = os.path.join(CHECKPOINT_DIR, 'resume.pth')
+VIZ_DIR  = os.path.join(CHECKPOINT_DIR, 'viz_attention')
+LOG_PATH = os.path.join(CHECKPOINT_DIR, 'train_attention.log')
 
 # ── Device ────────────────────────────────────────────────────────────────────
 DEVICE  = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -77,15 +79,31 @@ CROP_SIZE       = (128, 128, 128)
 NUM_CLASSES     = 4
 DEEP_SUP_WEIGHT = 0.4
 PATIENCE        = 15
-NUM_WORKERS     = 4 if IS_KAGGLE else 0   # Kaggle: multi-core aman; Colab: 0 hindari hang
+NUM_WORKERS     = 4 if IS_KAGGLE else 0
+N_VIZ_PATIENTS  = 3   # val patients to visualize after training
 
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+os.makedirs(VIZ_DIR, exist_ok=True)
+
+
+# ── Tee: print to stdout AND write to log file ────────────────────────────────
+class _Tee:
+    def __init__(self, *files):
+        self.files = files
+    def write(self, obj):
+        for f in self.files:
+            f.write(obj)
+            f.flush()
+    def flush(self):
+        for f in self.files:
+            f.flush()
+    def isatty(self):
+        return False
 
 
 # ── Build data loaders ────────────────────────────────────────────────────────
-
 def build_loaders():
     all_patients = sorted(glob.glob(
         os.path.join(DATA_ROOT, 'BraTS20_Training_*')))
@@ -100,11 +118,8 @@ def build_loaders():
         print(f"[Quick-run] Using {len(all_patients)} / "
               f"{len(sorted(glob.glob(os.path.join(DATA_ROOT, 'BraTS20_Training_*'))))} patients.")
 
-    # Split 1: pisahkan test (9%) dari sisanya (91%)
     trainval_dirs, test_dirs = train_test_split(
         all_patients, test_size=0.09, random_state=SEED)
-
-    # Split 2: dari 91%, pisahkan val (27/91 ≈ 29.7%) → train 64%, val 27%
     train_dirs, val_dirs = train_test_split(
         trainval_dirs, test_size=0.27/0.91, random_state=SEED)
 
@@ -126,7 +141,6 @@ def build_loaders():
 
 
 # ── Training epoch ────────────────────────────────────────────────────────────
-
 def train_one_epoch(model, loader, optimizer, criterion, scaler):
     model.train()
     total_loss = 0.0
@@ -141,7 +155,6 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler):
             main_out, deep_outs = model(images)
             loss = criterion(main_out, masks)
 
-            # Deep supervision: resize GT to each auxiliary output resolution
             for ds_out in deep_outs:
                 ds_target = F.interpolate(
                     masks.unsqueeze(1).float(),
@@ -158,7 +171,6 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler):
 
         total_loss += loss.item()
 
-        # Progress dot every 5 steps
         if step % 5 == 0 or step == len(loader):
             print(f"    step {step}/{len(loader)}  loss={loss.item():.4f}",
                   flush=True)
@@ -167,7 +179,6 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler):
 
 
 # ── Validation epoch ──────────────────────────────────────────────────────────
-
 @torch.no_grad()
 def validate(model, loader, criterion):
     model.eval()
@@ -180,7 +191,7 @@ def validate(model, loader, criterion):
         masks  = masks.to(DEVICE,  non_blocking=True)
 
         with autocast(device_type=DEVICE.type, enabled=USE_AMP):
-            pred = model(images)        # eval mode → single output tensor
+            pred = model(images)
             loss = criterion(pred, masks)
 
         total_loss += loss.item()
@@ -196,131 +207,215 @@ def validate(model, loader, criterion):
     return total_loss / len(loader), mean_scores, mean_iou
 
 
+# ── Dice helper for visualization ─────────────────────────────────────────────
+def _compute_dice(pred, gt, smooth=1e-5):
+    scores = {}
+    for name, labels in [('WT', [1, 2, 3]), ('TC', [1, 3]), ('ET', [3])]:
+        p     = np.isin(pred, labels).astype(float).ravel()
+        t     = np.isin(gt,   labels).astype(float).ravel()
+        inter = (p * t).sum()
+        scores[name] = (2 * inter + smooth) / (p.sum() + t.sum() + smooth)
+    return scores
+
+
+# ── Training history plot ─────────────────────────────────────────────────────
+def _plot_history(history, viz_dir):
+    epochs = range(1, len(history['train_loss']) + 1)
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle('Training History — Attention 3D U-Net', fontsize=13, fontweight='bold')
+
+    axes[0].plot(epochs, history['train_loss'], label='Train Loss', color='royalblue', lw=2)
+    axes[0].plot(epochs, history['val_loss'],   label='Val Loss',   color='tomato',    lw=2)
+    axes[0].set_title('Loss per Epoch')
+    axes[0].set_xlabel('Epoch')
+    axes[0].set_ylabel('Loss')
+    axes[0].legend()
+    axes[0].grid(alpha=0.3)
+
+    for r, c in zip(['WT', 'TC', 'ET'], ['green', 'tomato', 'royalblue']):
+        axes[1].plot(epochs, history[r], label=f'Dice {r}', color=c, lw=2)
+    axes[1].set_title('Dice Score per Epoch')
+    axes[1].set_xlabel('Epoch')
+    axes[1].set_ylabel('Dice')
+    axes[1].set_ylim(0, 1)
+    axes[1].legend()
+    axes[1].grid(alpha=0.3)
+
+    plt.tight_layout()
+    path = os.path.join(viz_dir, 'training_history.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    print(f"  Saved -> {path}")
+    plt.close(fig)
+
+
+# ── Validation prediction visualization ───────────────────────────────────────
+@torch.no_grad()
+def _plot_val_predictions(model, val_loader, viz_dir, n_patients=N_VIZ_PATIENTS):
+    model.eval()
+    print(f"\n[Visualizing {n_patients} val patients]")
+
+    for idx, (images, masks) in enumerate(val_loader):
+        if idx >= n_patients:
+            break
+
+        logits = model(images.to(DEVICE))
+        pred   = logits.argmax(dim=1).squeeze(0).cpu().numpy()   # (H,W,D)
+        gt     = masks.squeeze(0).cpu().numpy()                   # (H,W,D)
+        img_np = images.squeeze(0).cpu().numpy()                  # (4,H,W,D)
+
+        dice = _compute_dice(pred, gt)
+
+        tumor_per_sl = [(gt[:, :, s] > 0).sum() for s in range(gt.shape[-1])]
+        top_sl       = sorted(np.argsort(tumor_per_sl)[::-1][:3].tolist())
+
+        fig, axes = plt.subplots(len(top_sl), 5,
+                                 figsize=(20, 4 * len(top_sl)), squeeze=False)
+
+        for c, t in enumerate(['T1ce', 'FLAIR', 'T2', 'Ground Truth', 'Prediction']):
+            axes[0, c].set_title(t, fontsize=11, fontweight='bold', pad=8)
+
+        for row, sl in enumerate(top_sl):
+            axes[row, 0].imshow(img_np[2, :, :, sl], cmap='gray',    origin='lower')
+            axes[row, 1].imshow(img_np[0, :, :, sl], cmap='gray',    origin='lower')
+            axes[row, 2].imshow(img_np[3, :, :, sl], cmap='gray',    origin='lower')
+            axes[row, 3].imshow(gt[:, :, sl],         cmap='viridis', origin='lower', vmin=0, vmax=3)
+            axes[row, 4].imshow(pred[:, :, sl],       cmap='viridis', origin='lower', vmin=0, vmax=3)
+            for ax in axes[row]:
+                ax.axis('off')
+            axes[row, 0].set_ylabel(f'z={sl}', fontsize=9)
+
+        sm      = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(vmin=0, vmax=3))
+        cbar_ax = fig.add_axes([0.92, 0.15, 0.015, 0.7])
+        cb      = fig.colorbar(sm, cax=cbar_ax, ticks=[0, 1, 2, 3])
+        cb.set_ticklabels(['Background', 'Necrotic', 'Oedema', 'Enhancing'])
+        cb.ax.tick_params(labelsize=8)
+
+        fig.suptitle(
+            f'Val Patient {idx + 1} | '
+            f'WT={dice["WT"]:.3f}  TC={dice["TC"]:.3f}  ET={dice["ET"]:.3f}',
+            fontsize=12, fontweight='bold', y=1.01
+        )
+        plt.subplots_adjust(left=0.06, right=0.91, hspace=0.05, wspace=0.04)
+
+        path = os.path.join(viz_dir, f'val_pred_{idx + 1:02d}.png')
+        plt.savefig(path, dpi=120, bbox_inches='tight')
+        print(f"  Saved -> {path}")
+        plt.close(fig)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
-
 def main():
-    env = "Kaggle" if IS_KAGGLE else ("Colab" if IS_COLAB else "Local")
-    print("=" * 72)
-    print("  BraTS 2020 — Attention 3D U-Net Training")
-    print("=" * 72)
-    print(f"  Environment : {env}")
-    print(f"  Device      : {DEVICE}")
-    print(f"  AMP enabled : {USE_AMP}")
-    print(f"  Data root   : {DATA_ROOT}")
+    env  = "Kaggle" if IS_KAGGLE else ("Colab" if IS_COLAB else "Local")
+    logf = open(LOG_PATH, 'w', encoding='utf-8')
+    _orig_stdout = sys.stdout
+    sys.stdout   = _Tee(_orig_stdout, logf)
 
-    train_loader, val_loader, test_loader, n_train, n_val, n_test = build_loaders()
+    try:
+        print("=" * 72)
+        print("  BraTS 2020 — Attention 3D U-Net Training")
+        print("=" * 72)
+        print(f"  Environment : {env}")
+        print(f"  Device      : {DEVICE}")
+        print(f"  AMP enabled : {USE_AMP}")
+        print(f"  Data root   : {DATA_ROOT}")
+        print(f"  Log file    : {LOG_PATH}")
 
-    model     = AttentionUNet3D(in_channels=4, out_channels=NUM_CLASSES).to(DEVICE)
-    criterion = CombinedLoss(num_classes=NUM_CLASSES)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR,
-                                  weight_decay=WEIGHT_DECAY, amsgrad=True)
-    # CosineAnnealingLR: LR turun monoton dari LR ke eta_min selama EPOCHS epoch.
-    # Referensi: Isensee et al. (2021), nnU-Net, Nature Methods 18(2):203-211.
-    scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
-    scaler    = GradScaler('cuda', enabled=USE_AMP)
+        train_loader, val_loader, test_loader, n_train, n_val, n_test = build_loaders()
 
-    print(f"  Train/Val/Test : {n_train} / {n_val} / {n_test} patients")
-    print(f"  Parameters  : {count_parameters(model):,}")
-    print(f"  Epochs      : {EPOCHS}  |  Patience: {PATIENCE}")
-    print("=" * 72)
+        model     = AttentionUNet3D(in_channels=4, out_channels=NUM_CLASSES).to(DEVICE)
+        criterion = CombinedLoss(num_classes=NUM_CLASSES)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=LR,
+                                      weight_decay=WEIGHT_DECAY, amsgrad=True)
+        scheduler = CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
+        scaler    = GradScaler('cuda', enabled=USE_AMP)
 
-    best_mean_dice = 0.0
-    no_improve     = 0
-    start_epoch    = 1
-    history        = {k: [] for k in ['train_loss', 'val_loss',
-                                       'WT', 'TC', 'ET', 'mIoU']}
-
-    # ── Resume dari checkpoint jika sesi Colab terputus ───────────────────────
-    if os.path.exists(RESUME_PATH):
-        print(f"\n  [Resume] Memuat checkpoint dari: {RESUME_PATH}")
-        ckpt = torch.load(RESUME_PATH, map_location=DEVICE)
-        model.load_state_dict(ckpt['model_state_dict'])
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        scheduler.load_state_dict(ckpt['scheduler_state_dict'])
-        best_mean_dice = ckpt['best_mean_dice']
-        no_improve     = ckpt['no_improve']
-        start_epoch    = ckpt['epoch'] + 1
-        history        = ckpt['history']
-        print(f"  [Resume] Lanjut dari epoch {start_epoch}  |  "
-              f"Best Dice sejauh ini: {best_mean_dice:.4f}")
+        print(f"  Train/Val/Test : {n_train} / {n_val} / {n_test} patients")
+        print(f"  Parameters     : {count_parameters(model):,}")
+        print(f"  Epochs         : {EPOCHS}  |  Patience: {PATIENCE}")
         print("=" * 72)
 
-    for epoch in range(start_epoch, EPOCHS + 1):
-        print(f"\nEpoch [{epoch:03d}/{EPOCHS}]")
+        best_mean_dice = 0.0
+        no_improve     = 0
+        history        = {k: [] for k in ['train_loss', 'val_loss',
+                                           'WT', 'TC', 'ET', 'mIoU']}
 
-        train_loss = train_one_epoch(model, train_loader, optimizer,
-                                     criterion, scaler)
-        val_loss, dice_scores, miou = validate(model, val_loader, criterion)
-        scheduler.step()
+        for epoch in range(1, EPOCHS + 1):
+            print(f"\nEpoch [{epoch:03d}/{EPOCHS}]")
 
-        mean_dice = float(np.mean(list(dice_scores.values())))
-        lr_now    = scheduler.get_last_lr()[0]
+            train_loss = train_one_epoch(model, train_loader, optimizer,
+                                         criterion, scaler)
+            val_loss, dice_scores, miou = validate(model, val_loader, criterion)
+            scheduler.step()
 
-        # Record history
-        history['train_loss'].append(train_loss)
-        history['val_loss'].append(val_loss)
-        history['WT'].append(dice_scores['WT'])
-        history['TC'].append(dice_scores['TC'])
-        history['ET'].append(dice_scores['ET'])
-        history['mIoU'].append(miou)
+            mean_dice = float(np.mean(list(dice_scores.values())))
+            lr_now    = scheduler.get_last_lr()[0]
 
-        print(f"  TrainLoss : {train_loss:.4f}  |  ValLoss : {val_loss:.4f}")
-        print(f"  WT Dice   : {dice_scores['WT']:.4f}  |  "
-              f"TC Dice : {dice_scores['TC']:.4f}  |  "
-              f"ET Dice : {dice_scores['ET']:.4f}")
-        print(f"  mIoU      : {miou:.4f}  |  LR : {lr_now:.2e}")
+            history['train_loss'].append(train_loss)
+            history['val_loss'].append(val_loss)
+            history['WT'].append(dice_scores['WT'])
+            history['TC'].append(dice_scores['TC'])
+            history['ET'].append(dice_scores['ET'])
+            history['mIoU'].append(miou)
 
-        # ── Simpan resume checkpoint setiap epoch ─────────────────────────────
-        torch.save({
-            'epoch':                epoch,
-            'model_state_dict':     model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
-            'best_mean_dice':       best_mean_dice,
-            'no_improve':           no_improve,
-            'history':              history,
-        }, RESUME_PATH)
+            print(f"  TrainLoss : {train_loss:.4f}  |  ValLoss : {val_loss:.4f}")
+            print(f"  WT Dice   : {dice_scores['WT']:.4f}  |  "
+                  f"TC Dice : {dice_scores['TC']:.4f}  |  "
+                  f"ET Dice : {dice_scores['ET']:.4f}")
+            print(f"  mIoU      : {miou:.4f}  |  LR : {lr_now:.2e}")
 
-        # ── Simpan best model ──────────────────────────────────────────────────
-        if mean_dice > best_mean_dice:
-            best_mean_dice = mean_dice
-            no_improve     = 0
-            ckpt_path      = os.path.join(CHECKPOINT_DIR, 'best_model.pth')
-            torch.save({
-                'epoch':                epoch,
-                'model_state_dict':     model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'best_mean_dice':       best_mean_dice,
-                'history':              history,
-            }, ckpt_path)
-            print(f"  --> Checkpoint saved  (mean Dice = {best_mean_dice:.4f})")
-        else:
-            no_improve += 1
-            print(f"  No improvement {no_improve}/{PATIENCE}")
-            if no_improve >= PATIENCE:
-                print(f"\nEarly stopping at epoch {epoch}.")
-                break
+            if mean_dice > best_mean_dice:
+                best_mean_dice = mean_dice
+                no_improve     = 0
+                ckpt_path      = os.path.join(CHECKPOINT_DIR, 'best_model.pth')
+                torch.save({
+                    'epoch':                epoch,
+                    'model_state_dict':     model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'best_mean_dice':       best_mean_dice,
+                    'history':              history,
+                }, ckpt_path)
+                print(f"  --> Checkpoint saved  (mean Dice = {best_mean_dice:.4f})")
+            else:
+                no_improve += 1
+                print(f"  No improvement {no_improve}/{PATIENCE}")
+                if no_improve >= PATIENCE:
+                    print(f"\nEarly stopping at epoch {epoch}.")
+                    break
 
-    print(f"\nTraining complete.  Best mean Dice = {best_mean_dice:.4f}")
-    print(f"Checkpoint saved at: {os.path.join(CHECKPOINT_DIR, 'best_model.pth')}")
+        print(f"\nTraining complete.  Best mean Dice = {best_mean_dice:.4f}")
+        print(f"Checkpoint: {os.path.join(CHECKPOINT_DIR, 'best_model.pth')}")
 
-    # Evaluasi final di test set menggunakan best checkpoint
-    print("\n" + "=" * 72)
-    print("  Final Evaluation on Test Set")
-    print("=" * 72)
-    ckpt = torch.load(os.path.join(CHECKPOINT_DIR, 'best_model.pth'),
-                      map_location=DEVICE)
-    model.load_state_dict(ckpt['model_state_dict'])
-    test_loss, test_dice, test_miou = validate(model, test_loader, criterion)
-    test_mean_dice = float(np.mean(list(test_dice.values())))
-    print(f"  TestLoss  : {test_loss:.4f}")
-    print(f"  WT Dice   : {test_dice['WT']:.4f}  |  "
-          f"TC Dice : {test_dice['TC']:.4f}  |  "
-          f"ET Dice : {test_dice['ET']:.4f}")
-    print(f"  Mean Dice : {test_mean_dice:.4f}  |  mIoU : {test_miou:.4f}")
-    print("=" * 72)
+        # ── Final evaluation on test set using best checkpoint ─────────────────
+        print("\n" + "=" * 72)
+        print("  Final Evaluation on Test Set")
+        print("=" * 72)
+        ckpt = torch.load(os.path.join(CHECKPOINT_DIR, 'best_model.pth'),
+                          map_location=DEVICE)
+        model.load_state_dict(ckpt['model_state_dict'])
+        test_loss, test_dice, test_miou = validate(model, test_loader, criterion)
+        test_mean_dice = float(np.mean(list(test_dice.values())))
+        print(f"  TestLoss  : {test_loss:.4f}")
+        print(f"  WT Dice   : {test_dice['WT']:.4f}  |  "
+              f"TC Dice : {test_dice['TC']:.4f}  |  "
+              f"ET Dice : {test_dice['ET']:.4f}")
+        print(f"  Mean Dice : {test_mean_dice:.4f}  |  mIoU : {test_miou:.4f}")
+        print("=" * 72)
 
-    return history
+        # ── Training curves ────────────────────────────────────────────────────
+        print("\n[Generating training plots...]")
+        _plot_history(history, VIZ_DIR)
+
+        # ── Validation prediction visualization ────────────────────────────────
+        _plot_val_predictions(model, val_loader, VIZ_DIR, n_patients=N_VIZ_PATIENTS)
+
+        print(f"\nVisualizations saved to : {VIZ_DIR}")
+        print(f"Training log saved to   : {LOG_PATH}")
+
+        return history
+
+    finally:
+        sys.stdout = _orig_stdout
+        logf.close()
 
 
 if __name__ == '__main__':
